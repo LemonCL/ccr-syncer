@@ -73,6 +73,21 @@ type Checker struct {
 	stop        chan struct{}
 }
 
+// DatabaseMonitorRecoverer 是一个接口，用于恢复数据库监控任务
+type DatabaseMonitorRecoverer interface {
+	RecoverMonitorTask() error
+}
+
+// 全局变量，用于存储 DatabaseMonitor
+var (
+	globalDatabaseMonitor DatabaseMonitorRecoverer
+)
+
+// RegisterDatabaseMonitor 注册 DatabaseMonitor
+func RegisterDatabaseMonitor(monitor DatabaseMonitorRecoverer) {
+	globalDatabaseMonitor = monitor
+}
+
 func NewChecker(hostInfo string, db storage.DB, jm *JobManager) *Checker {
 	return &Checker{
 		lastStamp:  -1,
@@ -133,6 +148,16 @@ func (c *Checker) handleUpdate() {
 		c.err = c.jobManager.Recover(jobs)
 	}
 	log.Infof("update jobs %v", jobs)
+
+	// 恢复数据库监控任务
+	if globalDatabaseMonitor != nil {
+		if err := globalDatabaseMonitor.RecoverMonitorTask(); err != nil {
+			log.Warnf("Failed to recover database monitor task: %v", err)
+			// 不设置 c.err，因为这不是致命错误
+		} else {
+			log.Infof("Successfully recovered database monitor task")
+		}
+	}
 }
 
 func (c *Checker) handleCheck() {

@@ -18,6 +18,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -178,7 +179,13 @@ func main() {
 	// Step 3: create job manager && http service && checker
 	hostInfo := fmt.Sprintf("%s:%d", syncer.Host, syncer.Port)
 	jobManager := ccr.NewJobManager(db, factory, hostInfo)
-	httpService := service.NewHttpServer(syncer.Host, syncer.Port, db, jobManager)
+
+	// 创建一个带取消功能的context，用于优雅关闭
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // 确保在main函数退出时取消context
+
+	httpService := service.NewHttpServer(ctx, syncer.Host, syncer.Port, db, jobManager)
 	checker := ccr.NewChecker(hostInfo, db, jobManager)
 
 	// Step 4: http service start
@@ -235,18 +242,32 @@ func main() {
 		jobCollector.Collect()
 	}()
 
-	// Step 10: start signal mux
-	// use closure to capture httpService, checker, jobManager
+	// Step 10: start database monitor
+	service.GlobalDatabaseMonitor = service.NewDatabaseMonitor(ctx, db, jobManager)
+	// 注册数据库监控器，以便 Checker 可以恢复监控任务
+	ccr.RegisterDatabaseMonitor(service.GlobalDatabaseMonitor)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		service.GlobalDatabaseMonitor.Start()
+	}()
+	log.Infof("Database monitor started")
+
+	// Step 11: start signal mux
+	// use closure to capture httpService, checker, jobManager, databaseMonitor
 	signalHandler := func(signal os.Signal) bool {
 		switch signal {
 		case syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT:
 			log.Infof("handle signal: %s", signal.String())
+			// 取消context，通知所有使用该context的组件（包括DatabaseMonitor）
+			cancel()
 			// stop httpService first, denied new request
 			httpService.Stop()
 			checker.Stop()
 			jobManager.Stop()
 			monitor.Stop()
 			jobCollector.Stop()
+			service.GlobalDatabaseMonitor.Stop()
 			log.Info("all service stop")
 			return true
 		case syscall.SIGHUP:

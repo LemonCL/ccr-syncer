@@ -54,6 +54,10 @@ func NewSQLiteDB(dbPath string) (DB, error) {
 		return nil, xerror.Wrap(err, xerror.DB, "sqlite: create table syncers failed")
 	}
 
+	if _, err = db.Exec("CREATE TABLE IF NOT EXISTS monitor_db_job (db_name TEXT, job_name TEXT, request_name TEXT, timestamp INTEGER, is_cluster_job BOOLEAN, PRIMARY KEY(db_name, timestamp))"); err != nil {
+		return nil, xerror.Wrap(err, xerror.DB, "sqlite: create table monitor_db_job failed")
+	}
+
 	return &SQLiteDB{db: db}, nil
 }
 
@@ -405,6 +409,46 @@ func (s *SQLiteDB) RebalanceLoadFromDeadSyncers(syncers []string) error {
 	}
 
 	return nil
+}
+
+// AddMonitorJob adds a record to monitor_db_job table
+func (s *SQLiteDB) AddMonitorJob(dbName string, jobName string, requestName string, isClusterJob bool) error {
+	timestamp := time.Now().UnixNano()
+	if result, err := s.db.Exec("INSERT INTO monitor_db_job (db_name, job_name, request_name, timestamp, is_cluster_job) VALUES (?, ?, ?, ?, ?)", dbName, jobName, requestName, timestamp, isClusterJob); err != nil {
+		return xerror.Wrapf(err, xerror.DB, "sqlite: insert monitor job for db %s failed", dbName)
+	} else if rowNum, err := result.RowsAffected(); err != nil {
+		return xerror.Wrapf(err, xerror.DB, "sqlite: insert monitor job get affected rows failed")
+	} else if rowNum != 1 {
+		return xerror.Wrapf(err, xerror.DB, "sqlite: insert monitor job affected rows error, rows: %d", rowNum)
+	}
+
+	return nil
+}
+
+// GetMonitorJobs returns all active monitor jobs from monitor_db_job table
+func (s *SQLiteDB) GetMonitorJobs() ([]MonitorJobInfo, error) {
+	var jobs []MonitorJobInfo
+
+	// 查询所有活跃的监控任务
+	rows, err := s.db.Query("SELECT db_name, job_name, request_name, is_cluster_job FROM monitor_db_job WHERE is_cluster_job = 1")
+	if err != nil {
+		return nil, xerror.Wrapf(err, xerror.DB, "sqlite: get monitor jobs failed")
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var job MonitorJobInfo
+		if err := rows.Scan(&job.DBName, &job.JobName, &job.RequestName, &job.IsActive); err != nil {
+			return nil, xerror.Wrapf(err, xerror.DB, "sqlite: scan monitor job failed")
+		}
+		jobs = append(jobs, job)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, xerror.Wrapf(err, xerror.DB, "sqlite: iterate monitor jobs failed")
+	}
+
+	return jobs, nil
 }
 
 func (s *SQLiteDB) GetAllData() (map[string][]string, error) {

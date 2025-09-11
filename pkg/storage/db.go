@@ -27,6 +27,14 @@ var (
 	ErrJobNotExists = errors.New("job not exists")
 )
 
+// MonitorJobInfo 表示监控任务信息
+type MonitorJobInfo struct {
+	DBName      string // 数据库名称
+	JobName     string // 任务名称
+	RequestName string // 请求名称
+	IsActive    bool   // 是否活跃
+}
+
 const (
 	InvalidCheckTimestamp int64 = -1
 	defaultMaxOpenConns   int   = 20
@@ -79,6 +87,10 @@ type DB interface {
 	GetAllData() (map[string][]string, error)
 	// GetJobs
 	GetJobs() ([]string, error)
+	// AddMonitorJob adds a record to monitor_db_job table
+	AddMonitorJob(dbName string, jobName string, requestName string, isClusterJob bool) error
+	// GetMonitorJobs returns all active monitor jobs from monitor_db_job table
+	GetMonitorJobs() ([]MonitorJobInfo, error)
 }
 
 func SetDBOptions(db *sql.DB) {
